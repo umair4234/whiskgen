@@ -1,35 +1,22 @@
 import { AppConfig, AspectRatio, UploadMediaResponse, WhiskGenerationResponse } from '../types';
 
-const BASE_URL_GENERATE = 'https://aisandbox-pa.googleapis.com/v1/whisk:generateImage';
-const BASE_URL_RECIPE = 'https://aisandbox-pa.googleapis.com/v1/whisk:runImageRecipe';
-const BASE_URL_UPLOAD = 'https://labs.google/fx/api/trpc/backbone.uploadImage';
+// Points to the Vercel Serverless Function paths
+const API_BASE = '/api';
 
-const getHeaders = (config: AppConfig) => {
+const getProxyHeaders = (config: AppConfig) => {
   return {
     'Content-Type': 'application/json',
     'Authorization': `Bearer ${config.bearerToken}`,
-    'Origin': 'https://labs.google',
-    'Referer': 'https://labs.google/',
-    // Note: 'Cookie' header is often blocked by browsers in fetch requests for security.
-    // In a real browser environment, the user might need a CORS extension or run in a specific mode.
-    // We include it here as requested by the prompt logic.
-    'x-goog-auth-user': '0', // Often required for Google internal APIs
+    // We send the session token in a custom header so the Proxy can build the Cookie
+    'X-Session-Token': config.sessionToken 
   };
 };
 
-// Helper to convert File to Base64
 export const fileToBase64 = (file: File): Promise<string> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.readAsDataURL(file);
-    reader.onload = () => {
-      // Remove data:image/png;base64, prefix if needed for specific rawBytes payload
-      const result = reader.result as string;
-      // The API payload example shows "data:image/png;base64,..." usually, 
-      // but the prompt says "rawBytes": "data:image/png;base64,<BASE64_STRING>"
-      // So we keep the full string.
-      resolve(result);
-    };
+    reader.onload = () => resolve(reader.result as string);
     reader.onerror = error => reject(error);
   });
 };
@@ -55,18 +42,18 @@ export const uploadReferenceImage = async (
     },
   };
 
-  const response = await fetch(BASE_URL_UPLOAD, {
+  const response = await fetch(`${API_BASE}/upload`, {
     method: 'POST',
-    headers: getHeaders(config),
+    headers: getProxyHeaders(config),
     body: JSON.stringify(payload),
   });
 
   if (!response.ok) {
-    throw new Error(`Upload failed: ${response.status} ${response.statusText}`);
+    const err = await response.json().catch(() => ({ error: response.statusText }));
+    throw new Error(err.error || `Upload failed: ${response.status}`);
   }
 
   const data = (await response.json()) as UploadMediaResponse;
-  // Safely extract the ID based on the provided path
   try {
     return data.result.data.json.result.uploadMediaGenerationId;
   } catch (e) {
@@ -95,23 +82,21 @@ export const generateImageTextOnly = async (
     mediaCategory: "MEDIA_CATEGORY_BOARD",
   };
 
-  const response = await fetch(BASE_URL_GENERATE, {
+  const response = await fetch(`${API_BASE}/generate`, {
     method: 'POST',
-    headers: getHeaders(config),
+    headers: getProxyHeaders(config),
     body: JSON.stringify(payload),
   });
 
   if (!response.ok) {
-    throw new Error(`Generation failed: ${response.status} ${response.statusText}`);
+    const err = await response.json().catch(() => ({ error: response.statusText }));
+    throw new Error(err.error || `Generation failed: ${response.status}`);
   }
 
-  const data = (await response.json()) as WhiskGenerationResponse;
+  const data = await response.json();
+  if (data.image) return data.image;
   
-  if (data.imagePanels?.[0]?.generatedImages?.[0]?.encodedImage) {
-    return data.imagePanels[0].generatedImages[0].encodedImage;
-  }
-  
-  throw new Error("No image data found in response");
+  throw new Error("No image data returned from proxy");
 };
 
 export const generateImageWithRecipe = async (
@@ -129,13 +114,13 @@ export const generateImageWithRecipe = async (
       sessionId: sessionId,
     },
     imageModelSettings: {
-      imageModel: "GEM_PIX", // As requested for Recipe calls
+      imageModel: "GEM_PIX",
       aspectRatio: aspectRatio,
     },
     userInstruction: prompt,
     recipeMediaInputs: [
       {
-        caption: mediaGenerationId, // Using ID as caption/ref as per common internal API patterns or prompt
+        caption: mediaGenerationId,
         mediaInput: {
           mediaCategory: "MEDIA_CATEGORY_SUBJECT",
           mediaGenerationId: mediaGenerationId,
@@ -144,21 +129,19 @@ export const generateImageWithRecipe = async (
     ],
   };
 
-  const response = await fetch(BASE_URL_RECIPE, {
+  const response = await fetch(`${API_BASE}/generate`, {
     method: 'POST',
-    headers: getHeaders(config),
+    headers: getProxyHeaders(config),
     body: JSON.stringify(payload),
   });
 
   if (!response.ok) {
-    throw new Error(`Recipe generation failed: ${response.status} ${response.statusText}`);
+    const err = await response.json().catch(() => ({ error: response.statusText }));
+    throw new Error(err.error || `Recipe generation failed: ${response.status}`);
   }
 
-  const data = (await response.json()) as WhiskGenerationResponse;
+  const data = await response.json();
+  if (data.image) return data.image;
 
-  if (data.imagePanels?.[0]?.generatedImages?.[0]?.encodedImage) {
-    return data.imagePanels[0].generatedImages[0].encodedImage;
-  }
-
-  throw new Error("No image data found in response");
+  throw new Error("No image data returned from proxy");
 };
