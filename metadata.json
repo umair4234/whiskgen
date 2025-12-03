@@ -1,0 +1,5 @@
+{
+  "name": "WhiskGen Automation",
+  "description": "A premium, glassmorphism-styled bulk image generation tool interfacing with Whisk APIs. Features bulk prompt processing, subject reference support, and gallery management.",
+  "requestFramePermissions": []
+}
